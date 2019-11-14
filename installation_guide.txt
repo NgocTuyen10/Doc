@@ -1,0 +1,172 @@
+Installation guide
+-------------------------------------------------------------------------
+Installation YK-KSM
+
+1. Install httpd and php
+#yum -y install httpd php
+
+2. Install php-mcrypt
+#yum -y install epel-release
+
+3. Download and install the latest YK-KSM release
+#yum -y install wget make help2man
+#wget https://developers.yubico.com/yubikey-ksm/Releases/yubikey-ksm-1.15.tgz
+#wget https://developers.yubico.com/yubikey-ksm/Releases/yubikey-ksm-1.15.tgz.sig
+#gpg --verify yubikey-ksm-1.15.tgz.sig
+#tar xfz yubikey-ksm-1.15.tgz
+#cd yubikey-ksm-1.15
+#gedit Makefile 
+Change wwwgroup = www-data to wwwgroup = apache
+#make install
+
+4. Install mysql-server
+#wget http://repo.mysql.com/mysql-community-release-el7-5.noarch.rpm
+#rpm -ivh mysql-community-release-el7-5.noarch.rpm
+#yum update
+#yum install mysql-server
+#systemctl start mysqld
+#yum install php-mysql
+
+5. Install perl-DBD-MySQL
+#yum install perl-DBD-MySQL
+
+6. Create a database and a user
+#mysql -u root -p
+mysql> create database ykksm;
+mysql> quit;
+
+#mysql -u root -p ykksm < /usr/share/doc/yubikey-ksm/ykksm-db.sql
+#mysql -u root -p ykksm
+mysql> CREATE USER 'ykksmreader';
+mysql> GRANT SELECT ON ykksm.yubikeys TO 'ykksmreader'@'localhost';
+mysql> SET PASSWORD FOR 'ykksmreader'@'localhost' = PASSWORD('ykksmreader');
+mysql> CREATE USER 'ykksmimporter';
+mysql> GRANT INSERT ON ykksm.yubikeys TO 'ykksmimporter'@'localhost';
+mysql> SET PASSWORD FOR 'ykksmimporter'@'localhost' = PASSWORD('ykksmimporter');
+mysql> FLUSH PRIVILEGES;
+mysql> quit;
+
+7. Add configure file
+#vi /etc/php.d/ykksm.ini
+add include_path = "/etc/yubico/ksm:/usr/share/yubikey-ksm" to this file
+
+8. Change settings
+#gedit /usr/share/doc/yubikey-ksm/ykksm.mk
+Edit line 68 and change
+wwwprefix = /var/www/wsapi
+to:
+wwwprefix = /var/www/html/wsapi
+
+9. Make
+#make -f /usr/share/doc/yubikey-ksm/ykksm.mk symlink
+
+10. Update db setting
+#gedit /etc/yubico/ksm/ykksm-config.php
+change 
+$db_dsn      = "mysql:dbname=ykksm;host=localhost";
+$db_username = "ykksmreader";
+$db_password = "ykksmreader";
+
+11. Change permission
+#chown apache /usr/share/yubikey-ksm/
+#chown apache /etc/yubico/ksm/
+#chmod -R 0755 /usr/share/yubikey-ksm/
+#chmod -R 0755 /etc/yubico/ksm/
+
+12. Start httpd
+#systemctl start httpd.service
+
+13. test.
+#wget -O - 'http://localhost/wsapi/decrypt.php?otp=dteffujehknhfjbrjnlnldnhcujvddbikngjrtgh'
+
+14. Generate KSM Key --> Passphrase: toshiba-tsdv2019
+#yum install rng-tools
+#service rngd start
+#gpg --gen-key
+-->Your selection? 2
+-->Is this correct? (y/N) y
+-->Real name: YK-KSM crater Import Key (example)
+-->Change (N)ame, (C)omment, (E)mail or (O)kay/(Q)uit? o
+After that: gpg: key 8B88A11B marked as ultimately trusted
+
+15. Generate Keys
+#ykksm-gen-keys --urandom 1 5 | gpg -a --encrypt -r 8B88A11B -s > keys.txt
+( Note If command above is not working, run: #gpg --export-secret-keys )
+#gpg < keys.txt
+-->Emter your passphrase: toshiba-tsdv2019
+
+16. Import Keys To Yubikey KSM
+#ykksm-import --verbose --database 'DBI:mysql:dbname=ykksm;host=127.0.0.1' --db-user ykksmreader --db-passwd ykksmreader < ./keys.txt
+
+
+17. Testing
+#curl 'http://localhost/wsapi/decrypt?otp=cccccccccccdvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv'
+-->Expected: ERR Corrupt OTP
+
+--------------------------------------------------------------------------------------------
+Install YK_VAL
+
+1. Download and install YK-VAL
+#git clone https://github.com/Yubico/yubikey-val.git
+#cd yubikey-val
+#gedit Makefile 
+Change wwwgroup = www-data to wwwgroup = apache
+#sudo make install
+
+2. Database installation ( MySQL)
+Make sure mysql-server, php-mysql, perl-DBD-MySQL is installed.
+#echo 'create database ykval' | mysql
+#mysql ykval < /usr/share/doc/yubikey-val/ykval-db.sql
+#mysql --silent ykval
+mysql> CREATE USER 'ykval_verifier'@'localhost';
+mysql> GRANT SELECT,INSERT,UPDATE(modified, yk_counter, yk_low, yk_high, yk_use, nonce) ON ykval.yubikeys TO 'ykval_verifier'@'localhost';
+mysql> GRANT SELECT,INSERT,UPDATE(id, secret, active) ON ykval.clients TO 'ykval_verifier'@'localhost';
+mysql> GRANT SELECT,INSERT,UPDATE,DELETE ON ykval.queue TO 'ykval_verifier'@'localhost';
+mysql> SET PASSWORD FOR 'ykval_verifier'@'localhost' = PASSWORD('yourpassword');
+mysql> FLUSH PRIVILEGES;
+mysql> \q
+
+3. Deploy PHP via Apache
+#sudo mkdir /var/www/html/wsapi/2.0
+#sudo ln -sf /usr/share/yubikey-val/ykval-verify.php /var/www/html/wsapi/2.0/verify.php
+#sudo chgrp apache /usr/share/yubikey-val/*
+#vi /etc/php.d/ykksm.ini
+Add: include_path = ".:/etc/yubico/ksm:/usr/share/yubikey-ksm:/etc/yubico/val:/usr/share/yubikey-val"
+
+#vi /var/www/html/wsapi/2.0/.htaccess
+Add: RewriteEngine on
+	 RewriteRule ^([^/\.\?]+)(\?.*)?$ $1.php$2 [L]
+
+4. Update database configure
+#nano /etc/yubico/val/ykval-config.php
+$baseParams['__YKVAL_DB_DSN__'] = "mysql:dbname=ykval;host=localhost";
+$baseParams['__YKVAL_DB_USER__'] = 'ykval_verifier';
+$baseParams['__YKVAL_DB_PW__'] = 'yourpassword';
+
+5. Restart httpd
+#systemctl restart httpd.service
+
+6. Install ykclient (YubiKey C Client Library)
+#yum install curl-devel autoconf automake libtool 
+#git clone https://github.com/Yubico/yubico-c-client.git
+#cd yubico-c-client
+#sudo autoreconf --install
+#./configure
+#make check
+#sudo make install
+#ykclient --version
+
+7. Client generation
+#sudo ykval-gen-clients --urandom 5
+
+8. Testing
+#ykclient --debug --url "http://localhost/wsapi/2.0/verify" --apikey qPabuQ0i8FtS+G1EXcPI4/sdE6w= 1 cccccccccccdutfiljtbignbgckhgdtfigbdricugdrv
+-->Expected: Verification output (1): Yubikey OTP was bad (BAD_OTP)
+
+ 
+
+
+
+
+	
+	
